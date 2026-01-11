@@ -1,0 +1,76 @@
+
+import java.io.IOException;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import com.ma.entity.User;
+import com.ma.repository.UserRepository;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    @Autowired
+    private JwtService jwtService;
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+
+        final String authHeader = request.getHeader("Authorization");
+        final String jwtToken;
+        final String username;
+
+        // 1. Check if Authorization header is missing or not Bearer
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        // 2. Extract token (after "Bearer ")
+        jwtToken = authHeader.substring(7);
+        username = jwtService.extractUsername(jwtToken);
+
+        // 3. Validate user and security context
+        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            User user = userRepository.findByUsername(username)
+                    .orElseThrow(() -> new RuntimeException("User not found"));
+
+            // 4. Validate the token
+            if (jwtService.isTokenValid(jwtToken, user)) {
+
+                // Convert roles to GrantedAuthority
+                List<SimpleGrantedAuthority> authorities = user.getRoles().stream()
+                        .map(SimpleGrantedAuthority::new)
+                        .collect(Collectors.toList());
+
+                UsernamePasswordAuthenticationToken authToken =
+                        new UsernamePasswordAuthenticationToken(user, null, authorities);
+
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+                // 5. Set authentication in SecurityContext
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+
+        // 6. Continue filter chain
+        filterChain.doFilter(request, response);
+    }
+}
